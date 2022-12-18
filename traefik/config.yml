@@ -1,0 +1,64 @@
+http:
+  routers:
+    faasd-authed:
+      rule: "Host(`faasd.{{env "PRIVATE_DOMAIN"}}`) && (PathPrefix(`/system/`) || PathPrefix(`/ui/`) || Path(`/`))"
+      service: faasd
+      entrypoints: 
+        - private-websecure
+      tls:
+        certresolver: leresolver
+      middlewares:
+        - keycloak-auth@docker
+        - addAuthHeader@file
+    faasd-private:
+      rule: "Host(`faasd.{{env "PRIVATE_DOMAIN"}}`)"
+      service: faasd
+      entrypoints: 
+        - private-websecure
+      tls:
+        certresolver: leresolver
+    faasd-public-fcns:
+      entrypoints:
+        - websecure
+      rule: "HostRegexp(`{subdomain:[a-z]+}.fcn.{{env "BASE_DOMAIN"}}`)"
+      service: faasd
+      tls:
+        certresolver: leresolver
+        domains:
+          - main: "fcn.{{env "BASE_DOMAIN"}}"
+            sans:
+              - "*.fcn.{{env "BASE_DOMAIN"}}"
+      middlewares:
+        - mapToFcnPath
+    faasd-public:
+      rule: "Host(`fcn.{{env "BASE_DOMAIN"}}`)"
+      service: faasd
+      entrypoints:
+        - websecure
+      tls:
+        certResolver: leresolver
+      middlewares:
+        - addFcnPath
+  services:
+    faasd:
+      loadbalancer:
+        servers:
+          - url: http://faasd.lab.internal:8080/
+  middlewares:
+    mapToFcnPath:
+      redirectRegex:
+        regex: "^https://([a-z]+).fcn.{{env "BASE_DOMAIN"}}/(.*)"
+        replacement: "https://fcn.{{env "BASE_DOMAIN"}}/${1}/${2}"
+        permanent: false
+    addFcnPath:
+      replacePathRegex:
+        regex: "^/(.*)"
+        replacement: "/function/$1"
+    addAuthHeader:
+      headers:
+        customRequestHeaders:
+          Authorization: "Basic {{env "FAASD_AUTH"}}"
+    addRobotsHeader:
+      headers:
+        customResponseHeaders:
+          X-Robots-Tag: "none"

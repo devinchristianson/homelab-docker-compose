@@ -1,0 +1,101 @@
+services:
+  traefik:
+    image: traefik:latest
+    env_file: .env
+    ports:
+      - "${LOCAL_IP}:80:80"
+      - "${LOCAL_IP}:443:443"
+      - "${VPN_IP}:80:1080"
+      - "${VPN_IP}:443:10443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./acme.json:/acme.json"
+      - "./config.yml:/config.yml"
+    command:
+        # define healthcheck
+      - "--ping=true"
+        # Enable dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+        # security & provider config
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/config.yml"
+        # define routers for http and https
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.private-web.address=:1080"
+      - "--entrypoints.private-websecure.address=:10443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.private-web.http.redirections.entryPoint.to=:443"
+      - "--entrypoints.private-web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.private-web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.websecure.http.middlewares=addRobotsHeader@file"
+        # define and assign certificate resolver 
+      - "--entrypoints.websecure.http.tls.certResolver=leresolver"
+      - "--certificatesresolvers.leresolver.acme.email=${CERT_EMAIL}"
+      - "--certificatesresolvers.leresolver.acme.storage=acme.json"
+      - "--certificatesresolvers.leresolver.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.leresolver.acme.dnschallenge.delaybeforecheck=10"
+      - "--certificatesresolvers.leresolver.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53"
+     #- "--providers.file.directory=/files"
+     #- "--providers.file.watch=true"
+     #- "--certificatesresolvers.leresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+     #- "--log.level=DEBUG"
+      - "--accesslog=true"
+      - "--metrics.prometheus=true"
+      - "--entryPoints.metrics.address=:8082"
+      - "--metrics.prometheus.entryPoint=metrics"
+    networks:
+      - proxy-external
+      - proxy-internal
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dash.rule=Host(`traefik.${BASE_DOMAIN}`)"  
+      - "traefik.http.routers.traefik-dash.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dash.tls.certresolver=leresolver"
+      - "traefik.http.routers.traefik-dash.middlewares=keycloak-auth"
+      - "traefik.http.routers.traefik-dash.service=api@internal"
+  keycloak-auth:
+    image: thomseddon/traefik-forward-auth:2
+    environment:
+      DEFAULT_PROVIDER: "oidc"
+      PROVIDERS_OIDC_ISSUER_URL: "${PROVIDERS_OIDC_ISSUER_URL}"
+      PROVIDERS_OIDC_CLIENT_ID: "${PROVIDERS_OIDC_CLIENT_ID}"
+      PROVIDERS_OIDC_CLIENT_SECRET: "${PROVIDERS_OIDC_CLIENT_SECRET}"
+      SECRET: "${SECRET}"
+      COOKIE_DOMAIN: "${BASE_DOMAIN}"
+      AUTH_HOST: "${AUTH_HOST}"
+      #LOG_LEVEL: "debug"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak-auth.rule=Host(`auth.mdics.me`)"
+      - "traefik.http.routers.keycloak-auth.entrypoints=websecure"
+      - "traefik.http.routers.keycloak-auth.tls.certresolver=leresolver"
+      - "traefik.docker.network=traefik_proxy-internal"
+      - "traefik.http.middlewares.keycloak-auth.forwardauth.address=http://keycloak-auth:4181"
+      - "traefik.http.middlewares.keycloak-auth.forwardauth.authResponseHeaders=X-Forwarded-User,Set-Cookie"
+      - "traefik.http.middlewares.keycloak-auth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.routers.keycloak-auth.middlewares=keycloak-auth"
+      - "traefik.http.services.keycloak-auth.loadbalancer.server.port=4181"
+    restart: unless-stopped
+    networks:
+      - proxy-internal
+  whoami:
+    image: containous/whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`gw.mdics.me`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls.certresolver=leresolver"
+      - "traefik.docker.network=traefik_proxy-internal"
+      - "traefik.http.routers.whoami.middlewares=keycloak-auth"
+    restart: unless-stopped
+    networks:
+      - proxy-internal
+networks:
+  proxy-external:
+  proxy-internal:
