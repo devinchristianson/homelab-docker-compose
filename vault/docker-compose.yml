@@ -1,0 +1,24 @@
+version: "3.7"
+
+services:
+    vault:
+        image: vault
+        restart: unless-stopped
+        volumes:
+          - ./config.hcl:/vault/config/config.hcl:z
+          - ./root.crt:/root.crt
+        command: ["vault", "server", "-config", "/vault/config/config.hcl"]
+        cap_add: 
+          - IPC_LOCK
+        networks:
+          - traefik_proxy-external
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.vault.rule=Host(`vault.${BASE_DOMAIN}`)"
+          - "traefik.http.routers.vault.entrypoints=private-websecure"
+          - "traefik.http.routers.vault.tls.certresolver=leresolver"
+          - "traefik.docker.network=traefik_proxy-external"
+          - "traefik.http.services.vault.loadbalancer.server.port=8200"
+networks:
+    traefik_proxy-external:
+      external: true
