@@ -1,0 +1,5 @@
+bucket.yml
+.env
+data/grafana/
+data/prom0/vault-token
+data/prom0/prometheus.yml

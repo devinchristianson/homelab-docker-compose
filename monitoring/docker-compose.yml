@@ -1,0 +1,179 @@
+version: '3'
+
+services:
+  prometheus0:
+    image: prom/prometheus:v2.37.5
+    container_name: prometheus0
+    user: root
+    volumes:
+      - thanos0:/data
+      - ./data/prom0/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./data/prom0/vault-token:/etc/prometheus/vault-token
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/data/prom0"
+      - "--log.level=debug"
+      - "--web.enable-lifecycle"
+      - "--storage.tsdb.min-block-duration=2h"
+      - "--storage.tsdb.max-block-duration=2h"
+      - "--storage.tsdb.retention.size=8GB"
+      - "--web.listen-address=0.0.0.0:9090"
+    networks:
+      - thanos
+
+  sidecar0:
+    image: thanosio/thanos:v0.29.0
+    container_name: thanos-sidecar0
+    command:
+      - "sidecar"
+      - "--debug.name=sidecar-0"
+      - "--log.level=debug"
+      - "--grpc-address=0.0.0.0:10901"
+      - "--grpc-grace-period=1s"
+      - "--http-address=0.0.0.0:10902"
+      - "--http-grace-period=1s"
+      - "--prometheus.url=http://prometheus0:9090"
+      - "--tsdb.path=/data/prom0"
+      - "--objstore.config-file=/bucket.yml"
+    volumes:
+      - thanos0:/data
+      - ./data/bucket.yml:/bucket.yml
+    depends_on:
+      - prometheus0
+    networks:
+      - thanos
+
+  store:
+    image: thanosio/thanos:v0.29.0
+    container_name: thanos-store
+    restart: always
+    command:
+      - "store"
+      - "--debug.name=store"
+      - "--log.level=debug"
+      - "--grpc-address=0.0.0.0:10905"
+      - "--grpc-grace-period=1s"
+      - "--http-address=0.0.0.0:10906"
+      - "--http-grace-period=1s"
+      - "--data-dir=/data/store"
+      - "--objstore.config-file=/bucket.yml"
+    volumes:
+      - store:/data
+      - ./data/bucket.yml:/bucket.yml
+    networks:
+      - thanos
+
+  receive:
+    image: thanosio/thanos:v0.29.0
+    container_name: thanos-receive
+    command:
+      - "receive"
+      - "--debug.name=receive"
+      - "--log.level=debug"
+      - "--tsdb.path=/data/remote-write-receive-data"
+      - "--grpc-address=0.0.0.0:10907"
+      - "--grpc-grace-period=1s"
+      - "--http-address=0.0.0.0:10909"
+      - "--http-grace-period=1s"
+      - "--label=receive=\"true\""
+      - "--objstore.config-file=/bucket.yml"
+      - "--remote-write.address=0.0.0.0:10908"
+    volumes:
+      - receive:/data
+      - ./data/bucket.yml:/bucket.yml
+    networks:
+      - thanos
+
+  remotewrite:
+    image: prom/prometheus:v2.9.2
+    container_name: thanos-remote-write
+    user: root
+    volumes:
+      - ./data/local-prometheus-data/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      - prometheus0
+      - sidecar0
+    networks:
+      - thanos
+  query0:
+    image: thanosio/thanos:v0.29.0
+    container_name: thanos-query0
+    command:
+      - "query"
+      - "--debug.name=query0"
+      - "--log.level=debug"
+      - "--grpc-address=0.0.0.0:10903"
+      - "--grpc-grace-period=1s"
+      - "--http-address=0.0.0.0:10904"
+      - "--http-grace-period=1s"
+      - "--query.replica-label=prometheus"
+      - "--store=sidecar0:10901"
+      - "--store=store:10905"
+      - "--store=receive:10907"
+    depends_on:
+      - sidecar0
+      - store
+      - receive
+    networks:
+      - thanos
+      - traefik_proxy-external
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.thanos.rule=Host(`thanos.${PRIVATE_DOMAIN}`)"
+      - "traefik.http.routers.thanos.entrypoints=private-websecure"
+      - "traefik.http.routers.thanos.tls.certresolver=leresolver"
+      - "traefik.docker.network=traefik_proxy-external"
+      - "traefik.http.services.thanos.loadbalancer.server.port=10904"
+      
+  compactor:
+    image: thanosio/thanos:v0.29.0
+    container_name: compactor
+    command:
+      - "compact"
+      - "--data-dir=/tmp/thanos-compact"
+      - "--log.level=debug"
+      - "--objstore.config-file=/bucket.yml"
+      - "--http-address=0.0.0.0:10902"
+      - "--http-grace-period=2m"
+      - "--consistency-delay=30m"
+    volumes:
+      - compact:/tmp
+      - ./data/bucket.yml:/bucket.yml
+    depends_on:
+      - sidecar0
+      - store
+    networks:
+      - thanos
+      
+  grafana:
+    image: grafana/grafana:9.3.0
+    container_name: grafana
+    volumes:
+      - ./data/grafana/grafana.ini:/etc/grafana/grafana.ini
+      - ./data/grafana/root.crt:/etc/grafana/root.crt
+      #- ./data/grafana/provisioning:/etc/grafana/provisioning
+    restart: unless-stopped
+    networks:
+      - thanos
+      - traefik_proxy-external
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${PRIVATE_DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=private-websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=leresolver"
+      - "traefik.docker.network=traefik_proxy-external"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+networks:
+  traefik_proxy-external:
+    external: true
+  thanos: {}
+
+volumes:
+  thanos0: {}
+  store: {}
+  receive: {}
+  compact: {}

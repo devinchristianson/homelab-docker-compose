@@ -1,0 +1,35 @@
+version: '3'
+
+services:
+  keycloak:
+      image: jboss/keycloak
+      environment:
+        DB_VENDOR: POSTGRES
+        DB_ADDR: ${DB_ADDR}
+        DB_PORT: ${DB_PORT}
+        DB_DATABASE: ${DB_DATABASE}
+        DB_USER: ${DB_USER}
+        DB_SCHEMA: ${DB_SCHEMA}
+        DB_PASSWORD: ${DB_PASSWORD}
+        JDBC_PARAMS: ${JDBC_PARAMS}
+        PROXY_ADDRESS_FORWARDING: 'true'
+        #KEYCLOAK_LOGLEVEL: ALL
+      volumes:
+        - ./root.crt:/opt/jboss/.postgresql/root.crt
+      networks:
+        - traefik_proxy-external
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.keycloak.rule=Host(`sso.${BASE_DOMAIN}`)"
+        - "traefik.http.routers.keycloak.tls.certresolver=leresolver"
+        - "traefik.http.routers.login-keycloak.rule=Host(`login.${BASE_DOMAIN}`)"
+        - "traefik.http.routers.login-keycloak.tls.certresolver=leresolver"
+        - "traefik.http.middlewares.add-app-dash.redirectregex.regex=^https:\\/\\/([^\\/]+)\\/?$$"
+        - "traefik.http.middlewares.add-app-dash.redirectregex.replacement=https://sso.${BASE_DOMAIN}/auth/realms/mdicsme/account/#/applications"  
+        - "traefik.http.routers.login-keycloak.middlewares=add-app-dash"
+        - "traefik.docker.network=traefik_proxy-external"
+        - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      restart: unless-stopped
+networks:
+    traefik_proxy-external:
+      external: true

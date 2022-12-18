@@ -1,0 +1,61 @@
+# this contains all the services and configurations that aren't required for the base thanos stack
+version: '3'
+
+services:
+  prometheus0:
+    networks:
+      - traefik_proxy-external
+      - concourse_default
+  node-exporter:
+    image: prom/node-exporter:v1.5.0
+    container_name: node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - thanos
+  cadvisor:
+    image: google/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    command:
+      - "--port=9102"
+      # some options to potentially lower CPU usage - just specify the metrics you don't need
+      #- "--housekeeping_interval=30s"
+      #- "--docker_only=true"
+      #- "--disable_metrics="
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    privileged: true
+    expose:
+      - 8080
+    networks:
+      - thanos
+  pve-exporter:
+    container_name: pve-exporter
+    image: prompve/prometheus-pve-exporter
+    expose:
+    - 9221
+    environment:
+    - PVE_USER=${PVE_USER}
+    - PVE_TOKEN_NAME=${PVE_TOKEN_NAME}
+    - PVE_TOKEN_VALUE=${PVE_TOKEN_VALUE}
+    - PVE_VERIFY_SSL=false
+    networks:
+      - thanos
+
+networks:
+  concourse_default:
+    external: true
